@@ -405,6 +405,18 @@
             white-space: nowrap;
         }
 
+        #canvas-container {
+            cursor: default;
+        }
+
+        #canvas-container.align-mode {
+            cursor: crosshair;
+        }
+
+        #canvas-container.align-mode:hover {
+            cursor: crosshair;
+        }
+
         .align-section {
             background: #e3f2fd;
             padding: 15px;
@@ -772,14 +784,27 @@
             const container = document.getElementById('canvas-container');
             
             container.addEventListener('mousedown', (e) => {
+                // בדיקה אם במצב יישור וצריך לבחור נקודה
                 if (alignState.active && alignState.selectingModel !== null) {
-                    // מצב בחירת נקודות ליישור
                     const rect = container.getBoundingClientRect();
                     mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
                     mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
                     
-                    selectAlignmentPoint(e.clientX, e.clientY);
-                    return;
+                    // בדיקה אם העכבר נוגע במודל
+                    raycaster.setFromCamera(mouse, camera);
+                    const currentModel = models.find(m => m.id === alignState.selectingModel);
+                    
+                    if (currentModel) {
+                        const meshes = currentModel.meshes || (currentModel.mesh ? [currentModel.mesh] : []);
+                        const intersects = raycaster.intersectObjects(meshes, true);
+                        
+                        if (intersects.length > 0) {
+                            // יש נגיעה במודל - בחר נקודה
+                            selectAlignmentPoint(e.clientX, e.clientY);
+                            return; // לא להתחיל dragging
+                        }
+                    }
+                    // אין נגיעה במודל - המשך לdragging רגיל
                 }
                 
                 isDragging = true;
@@ -1652,19 +1677,22 @@
                 alignState.model1 = modelId;
                 alignState.points1 = [];
                 document.getElementById('alignSection').style.display = 'block';
-                updateAlignStatus('בחר 2 נקודות על ' + model.name);
+                document.getElementById('canvas-container').classList.add('align-mode');
+                updateAlignStatus('בחר 2 נקודות על ' + model.name + ' (גרור רקע לסיבוב)');
             } else if (alignState.model1 === modelId) {
                 // המשך עבודה עם אותו מודל
-                updateAlignStatus('בחר 2 נקודות על ' + model.name);
+                alignState.selectingModel = modelId;
+                updateAlignStatus('בחר 2 נקודות על ' + model.name + ' (גרור רקע לסיבוב)');
             } else if (alignState.model2 === modelId) {
                 // המשך עבודה עם המודל השני
-                updateAlignStatus('בחר 2 נקודות על ' + model.name);
+                alignState.selectingModel = modelId;
+                updateAlignStatus('בחר 2 נקודות על ' + model.name + ' (גרור רקע לסיבוב)');
             } else if (!alignState.model2 && alignState.points1.length === 2) {
                 // בחירת מודל שני
                 alignState.model2 = modelId;
                 alignState.selectingModel = modelId;
                 alignState.points2 = [];
-                updateAlignStatus('בחר 2 נקודות על ' + model.name);
+                updateAlignStatus('בחר 2 נקודות על ' + model.name + ' (גרור רקע לסיבוב)');
             } else {
                 alert('תחילה סיים לבחור נקודות במודל הנוכחי');
             }
@@ -1742,39 +1770,85 @@
                 return;
             }
 
+            // הנקודות שנבחרו הן במרחב עולם (world space)
+            // הנקודות של מודל 1 נשארות כמו שהן (יעד)
+            const target1 = alignState.points1[0].clone();
+            const target2 = alignState.points1[1].clone();
+            
+            // הנקודות של מודל 2 - צריך להמיר אותן למרחב מקומי (local space)
+            const worldToLocal2 = model2.group.matrixWorld.clone().invert();
+            const source1Local = alignState.points2[0].clone().applyMatrix4(worldToLocal2);
+            const source2Local = alignState.points2[1].clone().applyMatrix4(worldToLocal2);
+
             // חישוב וקטורים
-            const vec1 = new THREE.Vector3().subVectors(alignState.points1[1], alignState.points1[0]);
-            const vec2 = new THREE.Vector3().subVectors(alignState.points2[1], alignState.points2[0]);
+            const targetVec = new THREE.Vector3().subVectors(target2, target1);
+            const sourceVecLocal = new THREE.Vector3().subVectors(source2Local, source1Local);
 
-            // חישוב סקייל
-            const scale = vec1.length() / vec2.length();
-            
-            // יישום סקייל
-            model2.group.scale.multiplyScalar(scale);
+            // 1. חישוב סקייל (יחס אורכים)
+            const targetLength = targetVec.length();
+            const sourceLength = sourceVecLocal.length();
+            const scale = targetLength / sourceLength;
 
-            // חישוב זווית סיבוב
-            vec1.normalize();
-            vec2.normalize();
-            
+            // 2. נרמול הוקטורים
+            targetVec.normalize();
+            sourceVecLocal.normalize();
+
+            // 3. חישוב quaternion לסיבוב
             const quaternion = new THREE.Quaternion();
-            quaternion.setFromUnitVectors(vec2, vec1);
-            
-            // יישום סיבוב
-            model2.group.applyQuaternion(quaternion);
+            quaternion.setFromUnitVectors(sourceVecLocal, targetVec);
 
-            // חישוב תזוזה
+            // 4. יישום הטרנספורמציות על המודל
+            
+            // א. איפוס הסקייל הקודם וקביעת הסקייל החדש
+            const currentScale = model2.group.scale.clone();
+            model2.group.scale.set(scale, scale, scale);
+            
+            // ב. יישום הסיבוב
+            const rotation = new THREE.Euler().setFromQuaternion(quaternion);
+            model2.group.rotation.copy(rotation);
+            
+            // ג. עדכון המטריצה
             model2.group.updateMatrixWorld(true);
-            const newPos2Start = alignState.points2[0].clone().applyMatrix4(model2.group.matrixWorld);
-            const offset = new THREE.Vector3().subVectors(alignState.points1[0], newPos2Start);
             
-            model2.group.position.add(offset);
+            // ד. חישוב איפה הנקודה הראשונה של מודל 2 נמצאת עכשיו במרחב עולם
+            const currentSource1World = source1Local.clone()
+                .multiplyScalar(scale)
+                .applyQuaternion(quaternion)
+                .add(model2.group.position);
+            
+            // ה. חישוב ההזזה הדרושה
+            const translation = new THREE.Vector3().subVectors(target1, currentSource1World);
+            
+            // ו. יישום ההזזה
+            model2.group.position.add(translation);
+            model2.group.updateMatrixWorld(true);
 
-            // עדכון
+            // אימות - בדיקת המרחקים
+            const finalSource1 = source1Local.clone()
+                .multiplyScalar(scale)
+                .applyQuaternion(quaternion)
+                .add(model2.group.position);
+            const finalSource2 = source2Local.clone()
+                .multiplyScalar(scale)
+                .applyQuaternion(quaternion)
+                .add(model2.group.position);
+
+            const distance1 = finalSource1.distanceTo(target1);
+            const distance2 = finalSource2.distanceTo(target2);
+
+            console.log('מרחק נקודה 1:', distance1.toFixed(6));
+            console.log('מרחק נקודה 2:', distance2.toFixed(6));
+
+            // עדכון המערכת
             calculateGlobalBoundingBox();
             applyCuts();
             cancelAlignment();
             
-            alert('המודלים יושרו בהצלחה! ✓');
+            if (distance1 < 0.001 && distance2 < 0.001) {
+                alert('המודלים יושרו בהצלחה! ✓\nהנקודות מתלכדות במדויק.');
+            } else {
+                alert(`המודלים יושרו! ✓\nמרחק נקודה 1: ${distance1.toFixed(4)}\nמרחק נקודה 2: ${distance2.toFixed(4)}`);
+            }
         }
 
         function cancelAlignment() {
@@ -1792,6 +1866,7 @@
             
             document.getElementById('alignSection').style.display = 'none';
             document.getElementById('executeAlignBtn').disabled = true;
+            document.getElementById('canvas-container').classList.remove('align-mode');
             
             updateModelList();
         }
