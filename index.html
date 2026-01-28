@@ -129,6 +129,23 @@
             color: #333;
             margin-bottom: 5px;
             font-size: 0.9em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .color-indicator {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 2px solid #666;
+            flex-shrink: 0;
+        }
+
+        .color-name {
+            font-size: 0.75em;
+            color: #666;
+            font-weight: normal;
         }
 
         .model-date {
@@ -751,6 +768,15 @@
         let raycaster = new THREE.Raycaster();
         let mouse = new THREE.Vector2();
 
+        // מיפוי צבעים לשמות בעברית
+        const colorNames = {
+            0xFF6B6B: { name: 'אדום', hex: '#FF6B6B' },
+            0x4ECDC4: { name: 'טורקיז', hex: '#4ECDC4' },
+            0x45B7D1: { name: 'כחול', hex: '#45B7D1' },
+            0xFFA07A: { name: 'כתום', hex: '#FFA07A' },
+            0x98D8C8: { name: 'ירוק', hex: '#98D8C8' }
+        };
+
         function initThreeJS() {
             const container = document.getElementById('canvas-container');
             const instruction = container.querySelector('.instruction');
@@ -1362,13 +1388,19 @@
 
             models.forEach(model => {
                 const extension = model.name.split('.').pop().toUpperCase();
+                const colorInfo = colorNames[model.color] || { name: 'לא ידוע', hex: '#999999' };
+                
                 const item = document.createElement('div');
                 item.className = 'model-item';
                 item.innerHTML = `
                     <div>
                         <div class="model-name">
-                            ${model.name}
-                            ${extension === 'GLB' || extension === 'GLTF' ? '<span class="format-badge">NEW</span>' : ''}
+                            <div class="color-indicator" style="background-color: ${colorInfo.hex}"></div>
+                            <div style="flex: 1;">
+                                ${model.name}
+                                ${extension === 'GLB' || extension === 'GLTF' ? '<span class="format-badge">NEW</span>' : ''}
+                                <div class="color-name">צבע: ${colorInfo.name}</div>
+                            </div>
                         </div>
                         <div class="model-date">${model.date}</div>
                         <div class="model-controls">
